@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 # ====== Create fake dataset =====
 # Create random number generator.
 rng = np.random.default_rng(seed=123456)
-
+n_classes = 3
 v = np.array(
     [[1, 0],
      [-1, 1.2],
@@ -39,7 +39,10 @@ plt.show()
 
 # Concatenate points along axis = 0.
 points_ = np.concatenate(points)
-labels = np.array([0] * numbers[0] + [1] * numbers[1] + [2] * numbers[2])
+labels = []
+for i in range(n_classes):
+    labels.extend([i] * numbers[i])
+labels = np.array(labels)
 # Shuffle points and labels.
 indices = np.arange(len(points_))
 rng.shuffle(indices)
@@ -57,7 +60,7 @@ n_locals = 4
 # Create n_locals empty dataframes with columns x, y, and label.
 dfs = [pd.DataFrame(columns=['x', 'y', 'label']) for _ in range(n_locals)]
 # Create weights for each local dataset.
-weights = rng.integers(1, 51, size=(3, n_locals))
+weights = rng.integers(1, 51, size=(n_classes, n_locals))
 totals = np.sum(weights, axis=1)
 for i, r in enumerate(weights):
     r = r / totals[i]
@@ -67,8 +70,6 @@ for i, r in enumerate(weights):
     idxs = np.arange(numbers[i])
     rng.shuffle(idxs)
     idxs = np.split(idxs, np.cumsum(r)[:-1])
-    print(len(points[i]))
-    print(numbers[i])
     for j in range(n_locals):
         df = pd.DataFrame(points[i][idxs[j]], columns=['x', 'y'])
         df['label'] = r[j] * [i]

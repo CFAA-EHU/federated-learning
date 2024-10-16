@@ -159,7 +159,9 @@ train_db = db.sample(train_size)
 test_db = db.drop(train_db.index)
 train_db = PowerDataset(train_db)
 test_db = PowerDataset(test_db)
-trainloader = torch.utils.data.DataLoader(train_db, batch_size=10, shuffle=True)
+trainloader = torch.utils.data.DataLoader(
+    train_db, batch_size=10, shuffle=True
+)
 
 mlp = MLP()
 loss_f = nn.MSELoss(reduction='sum')
