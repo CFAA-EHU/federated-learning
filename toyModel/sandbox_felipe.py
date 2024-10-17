@@ -16,12 +16,12 @@ db_file = os.path.join(root, db_file)
 
 db = pd.read_csv(db_file)
 # Remove columns that are not useful.
-db = db.drop(columns=['precioPorKW', 'override_SPINDLE'])
+db = db.drop(columns=['precioPorKW', 'override_SPINDLE', 'power_X'])
 
 x_var = [
     'load_X',
     'load_Z',
-    'power_X',
+    # 'power_X',
     'power_Z',
     'load_SPINDLE',
     'speed_SPINDLE',
@@ -46,28 +46,20 @@ Y_var = 'potenciaKW'
 # db = db.loc[db['power_X'].abs() < 50]
 # db_Z = db.loc[db['power_Z'].abs() > 50]
 
-db_pred = []
 if machine == 'GMTK':
     # db = db[(db['load_X'] > 10) & (db['load_X'] < 30)]
-    db = db[(db['load_Z'] > 12.5) & (db['load_Z'] < 14)]
-    db = db[(db['power_X'] > -10) & (db['power_X'] < 10)]
-    # db = db[(db['power_Z'] > -5000) & (db['power_Z'] < 8000)]
-    # db = db[(db['load_SPINDLE'] > -0.1) & (db['load_SPINDLE'] < 25)]
-    # db = db[(db['speed_SPINDLE'] > -10) & (db['speed_SPINDLE'] < 10)]
-    db = db[(db['powerDrive_SPINDLE'] > -0.1) & (db['powerDrive_SPINDLE'] < 0.2)]
-    # db = db.loc[(db['load_Z'] > 12) & (db['load_Z'] < 15)]
-    ranges = {0: (0.8, 1), 1: (3.5, 3.7)}
+    ranges = {0: (-np.inf, 1), 1: (1, 4.118), 2: (4.118, np.inf)}
     for i, (low, high) in ranges.items():
-        db_pred.append(db.loc[(db[Y_var] > low) & (db[Y_var] <= high)])
+        db.loc[(db[Y_var] > low) & (db[Y_var] <= high), 'potenciaKW'] = i
 
 # %%
 fig, axs = plt.subplots(nrows=3, ncols=3)
-vars = ['load_X', 'load_Z', 'power_X']
+vars = ['load_X', 'load_Z', 'power_Z']
 colors = ['r', 'g', 'b']
 for i, j in np.ndindex(3, 3):
     if i > j:
-        for k, db_p in enumerate(db_pred):
-            db_p.plot(
+        for k in range(3):
+            db[(db['potenciaKW'] == k)].plot(
                 x=vars[j], y=vars[i],
                 kind='scatter',
                 color=colors[k],
@@ -79,26 +71,64 @@ for i, j in np.ndindex(3, 3):
 plt.show()
 
 # %%
-# Plot histograms in a single fig.
-db.hist(column=x_var, bins=500)
-plt.suptitle(machine)
+# ==== Linear classification ====
+from sklearn.svm import LinearSVC
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+
+# Only select two classes.
+tmp = db[(db['potenciaKW'] == 0) | (db['potenciaKW'] == 2)]
+# Split data set into training and test sets.
+X_train, X_test, y_train, y_test = train_test_split(
+    tmp[x_var], tmp[Y_var], test_size=0.2, random_state=12345
+)
+# Rescale data.
+scaler = StandardScaler()
+X_train = scaler.fit_transform(X_train)
+# Train classifier.
+clf = LinearSVC()
+clf.fit(X_train, y_train)
+# Test classifier.
+X_test = scaler.transform(X_test)
+score = clf.score(X_test, y_test)
+print(f'Accuracy: {score:.4f}')
+
+del tmp
+
+# %%
+# === Change coordinate system and draw separating line ===
+dim = len(x_var)
+w = clf.coef_
+b = clf.intercept_
+basis = np.eye(dim)
+basis[:, 0] = w / np.linalg.norm(w)
+sign = w[0, 0] / np.linalg.norm(w)
+basis = np.linalg.qr(basis)[0]
+basis = np.linalg.inv(basis)
+sign = int(sign / basis[0, 0])
+basis[:, 0] = sign * basis[:, 0]
+X_star = basis.dot(X_train.T)
+X_star = X_star.T
+
+fig, axs = plt.subplots(nrows=3, ncols=2)
+cdict = {0: 'r', 2: 'g'}
+x_sep = -b / np.linalg.norm(w)
+for i, ax in enumerate(axs.flat, 1):
+    for g in np.unique(y_train):
+        ix = np.where(y_train == g)
+        if i < 6:
+            ax.scatter(X_star[ix, 0], X_star[ix, i], c = cdict[g], label=g)
+            ax.set_xlabel('x_new_0')
+            ax.set_ylabel(f'x_new_{i}')
+            # Draw vertical line.
+            ax.axvline(x=0, color='k')
+    ax.legend()
 plt.show()
 
 # %%
-# Select rows randomly from database.
-n = 100
-cols = x_var + [Y_var]
-colors = ['r', 'g', 'b']
-# Concatenate the columns in a single row.
-for i, sub in enumerate(db_pred):
-    for _, s in sub.sample(n, random_state=123456).iterrows():
-        row = s[cols]
-        plt.plot(
-            cols,
-            row,
-            color=colors[i],
-            alpha=0.05
-        )
+# Plot histograms in a single fig.
+db.hist(column=x_var, bins=500)
+plt.suptitle(machine)
 plt.show()
 
 # %%
