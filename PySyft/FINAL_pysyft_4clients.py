@@ -38,16 +38,6 @@ DATASITE_URLS = {
     "DataSite4": "http://localhost:54882",
 }
 
-# Generación de mock data
-def generate_mock(data: pd.DataFrame, seed: int = 12345) -> pd.DataFrame:
-    np.random.seed(seed=seed)
-    mock_data = data.sample(n=len(data), replace=True).reset_index(drop=True)
-    for column in data.columns:
-        true_na_rate = data[column].isna().mean()
-        if true_na_rate > 0:
-            na_indices = np.random.choice(mock_data.index, size=int(true_na_rate * len(data)), replace=False)
-            mock_data.loc[na_indices, column] = np.nan
-    return mock_data
 
 # Creación del dataset Syft
 def create_syft_dataset(name: str) -> Optional[sy.Dataset]:
@@ -89,10 +79,12 @@ def spawn_server(sid: int):
 
 
 def dl_experiment(data, model_params = None):
+
     def preprocess_data(data):
         X = data[['load_X', 'load_Z', 'power_Z', 'speed_SPINDLE', 'override_SPINDLE', 'powerDrive_SPINDLE']].values
         y = data['consumo_potencia'].values
         X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
+        n_samples = len(X_train)
         scaler = StandardScaler()
         X_train = scaler.fit_transform(X_train)
         X_val = scaler.transform(X_val)
@@ -100,7 +92,7 @@ def dl_experiment(data, model_params = None):
         val_dataset = TensorDataset(torch.tensor(X_val, dtype=torch.float32), torch.tensor(y_val, dtype=torch.long))
         trainloader = DataLoader(train_dataset, batch_size=32, shuffle=True)
         valloader = DataLoader(val_dataset, batch_size=32)
-        return trainloader, valloader
+        return trainloader, valloader, n_samples
 
     # Define the neural network
     class Net(nn.Module):
@@ -118,7 +110,7 @@ def dl_experiment(data, model_params = None):
             x = self.fc3(x)
             return x
 
-
+    train_loss=[]
 
     def train(net, trainloader, epochs: int):
         criterion = nn.CrossEntropyLoss()  # Función de pérdida para clasificación multiclase
@@ -136,17 +128,13 @@ def dl_experiment(data, model_params = None):
 
                 # Acumular la pérdida y las métricas
                 epoch_loss += loss.item()  # Acumular la pérdida de este batch
-                #total += y_batch.size(0)  # Total de ejemplos en este batch
-                #_, predicted = torch.max(outputs, 1)  # Obtener las predicciones
-                #correct += (predicted == y_batch).sum().item()  # Comparar con etiquetas reales
-                #correct += (torch.max(outputs.data, 1)[1] == y_batch).sum().item()
-
             # Calcular métricas promedio para la época actual
             epoch_loss /= len(trainloader)  # Promedio de la pérdida
             #epoch_acc = correct / total  # Precisión como proporción de aciertos
+            train_loss.append(epoch_loss)
 
             #if verbose:
-            print(f"Epoch {epoch+1}/{epochs}: Train Loss: {epoch_loss:.4f}")
+            #print(f"Epoch {epoch+1}/{epochs}: Train Loss: {epoch_loss:.4f}")
         # es el equivalente a get_parameters
         return {k: t.cpu().numpy() for k, t in net.state_dict().items()}
 
@@ -155,6 +143,8 @@ def dl_experiment(data, model_params = None):
         val_loss = 0.0
         correct = 0
         total = 0
+        y_true = []
+        y_pred = []
         net.eval()
 
         with torch.no_grad():  # Desactivar el cálculo de gradientes para ahorrar memoria y acelerar
@@ -165,16 +155,22 @@ def dl_experiment(data, model_params = None):
 
                 # Predecir las clases con la mayor probabilidad
                 _, predicted = torch.max(outputs, 1)
+                y_true.extend(y_batch.tolist())
+                y_pred.extend(predicted.tolist())
                 total += y_batch.size(0)
                 correct += (predicted == y_batch).sum().item()
 
+        f1 = f1_score(y_true, y_pred, average='weighted')
         val_loss /= len(testloader)
         accuracy = correct / total
-        print("VAL LOSS: " + str(val_loss))
-        print("ACC:" + str(accuracy))
-        return val_loss, accuracy
+        #print(f"Val Loss: {val_loss:.6f}, Fscore: {f1:.6f}")
+        #print("TRAIN LOSS: " + str(train_loss[0]))
+        #print("VAL LOSS: " + str(val_loss))
+        #print("ACC:" + str(accuracy))
+        #print("FSCORE: " + str(f1))
+        return val_loss, accuracy, f1
 
-    trloader, teloader = preprocess_data(data)
+    trloader, teloader, n_samples = preprocess_data(data)
 
     net = Net()
 
@@ -183,44 +179,64 @@ def dl_experiment(data, model_params = None):
 
     net.to(DEVICE)
     model_params=train(net, trloader, 1)
-    val_loss, accuracy = test(net,teloader)
-    return model_params, accuracy
+    train_lo = train_loss[0]
+    val_loss, accuracy, f1 = test(net,teloader)
+    return model_params, train_lo, val_loss, accuracy, f1, n_samples
 
 
 
 
 
 # Setup federated learning
-def avg(all_models_params):
-    return {param: np.mean([p[param] for p in all_models_params], axis=0)
-            for param in all_models_params[0].keys()}
-
+def avg(all_models_params, num_samples):
+    total_samples = np.sum(num_samples)
+    return {
+        param: sum(
+            (n / total_samples) * p[param]
+            for p, n in zip(all_models_params, num_samples)
+        )
+        for param in all_models_params[0].keys()
+    }
 
 if __name__ == "__main__":
-    FL_EPOCHS = 10
+    FL_EPOCHS = 100
 
-    datasites = [spawn_server(0)[1], spawn_server(1)[1], spawn_server(2)[1], spawn_server(3)[1]]  # Lanzamiento de DataSites y clientes
+    #datasites = [spawn_server(0)[1], spawn_server(1)[1], spawn_server(2)[1], spawn_server(3)[1]]  # Lanzamiento de DataSites y clientes
+    datasites = [spawn_server(0), spawn_server(1), spawn_server(2), spawn_server(3)]
+    #datasites = [spawn_server(0)]
 
     model_params = dict()
     fl_metrics = defaultdict(list)  # one entry per epoch as a list
     for epoch in range(FL_EPOCHS):
         accs = []
+        trainls = []
+        valls = []
+        f1s = []
+        all_params = []
+        num_samples = []
         for datasite in datasites:
             data_asset = datasite.datasets["Custom Dataset"].assets["Consumo Potencia Data"]
             # print(type(data_asset)) # <class 'syft.service.dataset.dataset.Asset'>
             # Convertir el asset a DataFrame
             data_df = data_asset.data  # Asegúrate de que esto retorne un DataFrame
             #print(data_df) # esto es un dataframe
-            params, acc = dl_experiment(data_df,model_params)
+            params, trainl, vall, acc, f1, n = dl_experiment(data_df,model_params)
+            all_params.append(params)
+            num_samples.append(n)
             fl_metrics[epoch].append(params)
             accs.append(acc)
+            trainls.append(trainl)
+            valls.append(vall)
+            f1s.append(f1)
 
-        #### FALTA SACAR LA MEDIA DEL ACCURACCY Y EL LOSS ####
         avg_accuracy = np.mean(accs)
-        print(f"Epoch {epoch + 1}/{FL_EPOCHS}, Mean Accuracy: {avg_accuracy:.4f}")
+        avg_trainl = np.mean(trainls)
+        avg_vall = np.mean(valls)
+        avg_f1 = np.mean(f1s)
+        print(f"Epoch {epoch + 1}/{FL_EPOCHS}, Trainl: {avg_trainl:.6f}, Vall: {avg_vall:.6f}, Accuracy: {avg_accuracy:.6f}, F1: {avg_f1:.6f}")
 
 
-        model_params = avg([params for params in fl_metrics[epoch]])
+        model_params = avg(all_params, num_samples)
 
 
     print("FIN")
