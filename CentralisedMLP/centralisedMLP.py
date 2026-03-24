@@ -10,13 +10,13 @@ from sklearn.metrics import accuracy_score, f1_score
 # ======================
 # Reproducibility
 # ======================
-torch.manual_seed(42)
+#torch.manual_seed(42)
 np.random.seed(42)
 
 # ======================
 # Load training data (6000 aggregated)
 # ======================
-df_train = pd.read_csv("/home/ubuntu/aprendizaje_federado/ss.csv")
+df_train = pd.read_csv("/home/ubuntu/aprendizaje_federado/totalData.csv")
 
 X = df_train[['load_X', 'load_Z', 'power_Z', 'speed_SPINDLE',
               'override_SPINDLE', 'powerDrive_SPINDLE']].values
@@ -111,7 +111,7 @@ train(net, train_loader, epochs=100)
 # ======================
 # Load TEST SET (global)
 # ======================
-df_test = pd.read_csv("/home/ubuntu/aprendizaje_federado/rs.csv")
+df_test = pd.read_csv("/home/ubuntu/aprendizaje_federado/test.csv")
 
 X_test = df_test[['load_X', 'load_Z', 'power_Z', 'speed_SPINDLE',
                   'override_SPINDLE', 'powerDrive_SPINDLE']].values
